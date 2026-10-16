@@ -41,6 +41,7 @@
   *{box-sizing:border-box}
   [hidden]{display:none!important}
   html,body{height:100%}
+  body{margin:0}
   body{background:var(--night);color:var(--on-night);font-family:var(--f-body);-webkit-font-smoothing:antialiased;overscroll-behavior:none}
   button{font:inherit;cursor:pointer}
   button:focus-visible,textarea:focus-visible{outline:3px solid var(--gold);outline-offset:3px}
@@ -145,6 +146,22 @@
   .next b{font-variant-numeric:tabular-nums;color:var(--ink)}
   #copyBox{width:100%;min-height:96px;border-radius:12px;border:1px solid rgba(18,23,51,.2);padding:10px;font:inherit;font-size:.85rem;background:#fff;color:var(--ink)}
   .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--paper);color:var(--ink);font-weight:800;font-size:.88rem;padding:10px 16px;border-radius:999px;z-index:30;max-width:calc(100% - 32px)}
+  /* Màn hình ngang (máy tính, trang game web, điện thoại xoay ngang): cảnh cứu hộ bên trái, câu hỏi bên phải */
+  @media (min-aspect-ratio:5/4) and (min-width:640px){
+    .app{max-width:1280px;height:100vh;height:100dvh;min-height:0;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,1fr);
+      grid-template-rows:auto auto auto auto 1fr auto auto;column-gap:clamp(14px,2.5vw,32px);row-gap:10px}
+    .bar,.foot{grid-column:1/-1}
+    .scene-wrap{grid-column:1;grid-row:2/7;height:auto;min-height:0}
+    .tabs{grid-column:2;grid-row:2} .banner{grid-column:2;grid-row:3} .status{grid-column:2;grid-row:4}
+    .stage{grid-column:2;grid-row:5;align-self:center} .choices{grid-column:2;grid-row:6}
+    .name{font-size:clamp(.95rem,1.7vw,1.35rem)} .value{font-size:clamp(1.1rem,2.3vw,1.8rem)}
+    .card{min-height:clamp(120px,24vh,200px)}
+    .scene-msg{font-size:clamp(1.3rem,2.6vw,2.2rem)}
+  }
+  @media (min-aspect-ratio:5/4) and (min-width:640px) and (max-height:480px){
+    .app{row-gap:6px;padding-block:6px 8px} .tabs button{padding:5px} .card{min-height:0;padding:8px 10px} .choices button{padding:10px 8px} .foot{display:none}
+    .app{grid-template-rows:auto auto auto auto 1fr auto 0}
+  }
   @media (prefers-reduced-motion:reduce){.btn.go{animation:none}.card.enter,.card.lose,.scene-msg,.flash,#timerBar.low{animation:none}.choices button{transition:none}}
 </style>
 
@@ -225,6 +242,7 @@
       <div><b id="stStreak">0</b><span>Streak</span></div>
       <div><b id="stBest">0</b><span>Best run</span></div>
     </div>
+    <button class="btn go" id="btnRevive" type="button" hidden>▶ Watch ad: +1 rope</button>
     <button class="btn primary" id="btnShare" type="button">Copy result</button>
     <textarea id="copyBox" readonly hidden aria-label="Text to share"></textarea>
     <button class="btn ghost" id="btnAlt" type="button">Play endless</button>
@@ -233,6 +251,49 @@
 </section>
 <div class="toast" id="toast" role="status" hidden></div>
 
+<script>
+// Cầu nối tới trang game web (CrazyGames SDK v3). Trên web thường không có SDK → mọi hàm là "không làm gì".
+// Bản CrazyGames nạp https://sdk.crazygames.com/crazygames-sdk-v3.js trước file này.
+(function (root) {
+  var noop = function () {};
+  var P = { env: "web", init: null, start: noop, stop: noop, happy: noop, rewarded: null, invite: null,
+    midgame: function (cb) { cb(); }, param: function () { return null; }, soundPref: function () { return true; } };
+  var SDK = root.CrazyGames && root.CrazyGames.SDK;
+  if (SDK) {
+    var ready = false, playing = false;
+    P.env = "crazygames";
+    P.init = Promise.resolve().then(function () { return SDK.init(); }).then(function () { ready = true; }, function () {});
+    P.start = function () { if (ready && !playing) { playing = true; try { SDK.game.gameplayStart(); } catch (e) {} } };
+    P.stop = function () { if (ready && playing) { playing = false; try { SDK.game.gameplayStop(); } catch (e) {} } };
+    P.happy = function () { if (ready) try { SDK.game.happytime(); } catch (e) {} };
+    // Quảng cáo: tắt tiếng game trong lúc phát, xong thì trả lại đúng lựa chọn tiếng của người chơi
+    var ad = function (type, done) {
+      if (!ready) { done(false); return; }
+      var S = root.MOL_SOUND, was = playing, fin = false;
+      var end = function (ok) {
+        if (fin) return; fin = true;
+        if (S) S.setEnabled(P.soundPref());
+        if (was) P.start();
+        done(ok);
+      };
+      P.stop();
+      try {
+        SDK.ad.requestAd(type, {
+          adStarted: function () { if (S) S.setEnabled(false); },
+          adFinished: function () { end(true); },
+          adError: function () { end(false); }
+        });
+      } catch (e) { end(false); }
+    };
+    P.midgame = function (cb) { ad("midgame", function () { cb(); }); };
+    P.rewarded = function (cb) { ad("rewarded", cb); };
+    P.invite = function (params) { try { return SDK.game.inviteLink(params); } catch (e) { return null; } };
+    P.param = function (k) { try { return SDK.game.getInviteParam(k); } catch (e) { return null; } };
+  }
+  root.MOL_PORTAL = P;
+})(typeof window !== "undefined" ? window : globalThis);
+
+</script>
 <script>
 // Ngân hàng dữ liệu "More or Less". Mỗi hạng mục: [tên, giá trị].
 // Chỉ ghép cặp khi hai giá trị chênh đủ xa (minRatio / minDiff) để sai số nguồn không làm sai đáp án.
@@ -542,6 +603,14 @@
     lava1: "#fff07a", lava2: "#ff6a1a", lava3: "#8f1208", steel: "#c9cde0", steelDk: "#6e7392", rope: "#e8c48a", char: "#3a2a22",
     ink: "#1a1230", monster: "#4f0b10", monsterHi: "#8e2018", eye: "#ffe14a", tooth: "#fff4e0", white: "#ffffff"
   };
+  // Sự kiện Halloween: tự bật 24/10–2/11 (giờ máy người chơi); thêm #halloween vào link để xem thử
+  var HALLOWEEN = (function () {
+    try { if (/halloween/i.test(root.location.hash + root.location.search)) return true; } catch (e) {}
+    var d = new Date(), m = d.getMonth(), day = d.getDate();
+    return (m === 9 && day >= 24) || (m === 10 && day <= 2);
+  })();
+  if (HALLOWEEN) { C.sky1 = "#0b0624"; C.sky2 = "#3a0f5c"; C.sky3 = "#d2561c"; C.rockFar = "#2a1240"; C.volcano = "#24113a"; }
+  root.MOL_HALLOWEEN = HALLOWEEN;
   var FONT = "800 {s}px Unbounded, 'Arial Black', Impact, sans-serif";
   function font(px) { return FONT.replace("{s}", Math.round(px)); }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -709,6 +778,7 @@
         ctx.fillStyle = C.white; ctx.fillRect(p[0] * W, p[1] * H, p[2], p[2]);
       });
       ctx.globalAlpha = 1;
+      if (HALLOWEEN) drawMoon(g);
       // núi lửa phía xa
       var eg = st.erupt;
       if (eg > 0) {
@@ -743,6 +813,7 @@
       ctx.strokeStyle = C.rockHi; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(-30, g.cliffLTop); ctx.lineTo(g.cliffL * 0.7, g.cliffLTop - 6); ctx.lineTo(g.cliffL, g.cliffLTop + 10); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(g.cliffR, g.cliffRTop + 8); ctx.lineTo(g.cliffR + W * 0.06, g.cliffRTop); ctx.lineTo(W + 30, g.cliffRTop - 4); ctx.stroke();
+      if (HALLOWEEN) { drawPumpkin(g.cliffL * 0.42, g.cliffLTop - 3, g.s * 0.34, 0); drawPumpkin(W * 0.95, g.cliffRTop - 5, g.s * 0.26, 1.7); }
       // cần cẩu
       ctx.strokeStyle = C.steel; ctx.lineWidth = 5; ctx.lineCap = "round";
       ctx.beginPath(); ctx.moveTo(g.postX, g.cliffRTop); ctx.lineTo(g.postX, g.armY); ctx.lineTo(g.ropeX - 14, g.armY); ctx.stroke();
@@ -794,6 +865,51 @@
       });
       ctx.globalAlpha = 1;
       if (st.ghost) drawGhost(st.ghost, s);
+    }
+
+    // Halloween: trăng tròn cam + đàn dơi bay ngang
+    function drawMoon(g) {
+      var mx = W * 0.8, my = H * 0.17, mr = Math.min(W, H) * 0.11;
+      var halo = ctx.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 2.6);
+      halo.addColorStop(0, "rgba(255,190,90,.35)"); halo.addColorStop(1, "rgba(255,150,60,0)");
+      ctx.fillStyle = halo; ctx.fillRect(mx - mr * 3, my - mr * 3, mr * 6, mr * 6);
+      ctx.fillStyle = "#ffcf7a"; ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(214,140,60,.45)";
+      [[-0.3, -0.2, 0.22], [0.25, 0.15, 0.16], [-0.05, 0.4, 0.12]].forEach(function (c) {
+        ctx.beginPath(); ctx.arc(mx + c[0] * mr, my + c[1] * mr, c[2] * mr, 0, Math.PI * 2); ctx.fill();
+      });
+      ctx.fillStyle = "#120720";
+      for (var i = 0; i < 5; i++) {
+        var ph = (st.t * (0.05 + i * 0.012) + i * 0.23) % 1, bx = -40 + ph * (W + 80), by = H * (0.1 + 0.07 * i) + Math.sin(st.t * 2 + i) * 8;
+        var sz = 7 + (i % 3) * 3, flap = Math.sin(st.t * 14 + i * 2) * 0.6;
+        ctx.save(); ctx.translate(bx, by);
+        ctx.beginPath(); ctx.ellipse(0, 0, sz * 0.28, sz * 0.36, 0, 0, Math.PI * 2); ctx.fill();
+        for (var sd = -1; sd <= 1; sd += 2) {
+          ctx.beginPath(); ctx.moveTo(0, 0);
+          ctx.quadraticCurveTo(sd * sz * 0.7, -sz * (0.6 + flap), sd * sz * 1.4, -sz * 0.2 * flap);
+          ctx.quadraticCurveTo(sd * sz * 1.0, sz * 0.15, sd * sz * 0.75, sz * 0.05);
+          ctx.quadraticCurveTo(sd * sz * 0.5, sz * 0.3, 0, sz * 0.1); ctx.fill();
+        }
+        ctx.restore();
+      }
+    }
+    // Halloween: bí ngô mặt cười trên vách đá, ánh nến lập loè
+    function drawPumpkin(x, y, r, seed) {
+      var fl = 0.75 + 0.25 * Math.sin(st.t * 9 + seed * 5) * Math.sin(st.t * 5.3 + seed);
+      var gl = ctx.createRadialGradient(x, y - r * 0.6, 2, x, y - r * 0.6, r * 3);
+      gl.addColorStop(0, "rgba(255,170,40," + 0.45 * fl + ")"); gl.addColorStop(1, "rgba(255,120,20,0)");
+      ctx.fillStyle = gl; ctx.fillRect(x - r * 3, y - r * 3.6, r * 6, r * 6);
+      ctx.fillStyle = "#e8741c";
+      for (var k = -1; k <= 1; k++) { ctx.beginPath(); ctx.ellipse(x + k * r * 0.42, y - r * 0.62, r * 0.55, r * 0.62, 0, 0, Math.PI * 2); ctx.fill(); }
+      ctx.fillStyle = "#c9561a"; ctx.beginPath(); ctx.ellipse(x, y - r * 0.62, r * 0.38, r * 0.62, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#3f6b1c"; ctx.lineWidth = Math.max(2, r * 0.14); ctx.lineCap = "round";
+      ctx.beginPath(); ctx.moveTo(x, y - r * 1.15); ctx.quadraticCurveTo(x + r * 0.1, y - r * 1.5, x + r * 0.3, y - r * 1.55); ctx.stroke();
+      ctx.fillStyle = "rgba(255," + Math.round(200 + 55 * fl) + ",90," + (0.7 + 0.3 * fl) + ")";
+      ctx.beginPath(); ctx.moveTo(x - r * 0.55, y - r * 0.85); ctx.lineTo(x - r * 0.3, y - r * 0.55); ctx.lineTo(x - r * 0.12, y - r * 0.85); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x + r * 0.55, y - r * 0.85); ctx.lineTo(x + r * 0.3, y - r * 0.55); ctx.lineTo(x + r * 0.12, y - r * 0.85); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x - r * 0.6, y - r * 0.42);
+      for (var t = 0; t <= 6; t++) ctx.lineTo(x - r * 0.6 + t * r * 0.2, y - r * (t % 2 ? 0.32 : 0.42));
+      ctx.quadraticCurveTo(x, y - r * 0.02, x - r * 0.6, y - r * 0.42); ctx.fill();
     }
 
     // Dây: phần đã cháy (phía trên ngọn lửa) đen sạm, ngọn lửa bò dần xuống lồng theo đồng hồ
@@ -1357,6 +1473,8 @@
   function sfx(k) { SND.play(k); }
   // Đo lường: bản phát hành gắn window.MOL_TRACK (GoatCounter); không có thì bỏ qua
   function track(name) { try { if (root.MOL_TRACK) root.MOL_TRACK(name); } catch (e) {} }
+  // Trang game web (CrazyGames): báo lúc đang chơi, quảng cáo, link mời bạn. Web thường: không làm gì.
+  var PORTAL = root.MOL_PORTAL || { start: function () {}, stop: function () {}, happy: function () {}, midgame: function (cb) { cb(); }, param: function () { return null; } };
   function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
 
   // ---------- Giao diện ----------
@@ -1398,6 +1516,7 @@
       renderStatus(); showSceneMsg(outcome === "won"); showEnd(); return;
     }
     hideSceneMsg();
+    PORTAL.start();
     nextRound();
   }
   function dailyOutcome() {
@@ -1417,6 +1536,7 @@
     else b.hidden = true;
     hideEnd(); hideSceneMsg();
     scene && scene.reset({ need: NEED, allow: ENDLESS_STRANDS + 1, ch: state.ch });
+    PORTAL.start();
     nextRound();
   }
 
@@ -1551,7 +1671,7 @@
     if (rescued || caught) {
       setTimeout(function () {
         track(state.mode + (rescued ? "-rescued" : "-caught"));
-        if (rescued) { scene && scene.rescue(); sfx("rescue"); setTimeout(function () { sfx("thanks"); }, 1900); }
+        if (rescued) { PORTAL.happy(); scene && scene.rescue(); sfx("rescue"); setTimeout(function () { sfx("thanks"); }, 1900); }
         else { scene && scene.capture(); sfx("snap"); setTimeout(function () { sfx("captured"); vibrate([200, 80, 300]); }, 450); }
         showSceneMsg(rescued);
       }, 700);
@@ -1610,18 +1730,20 @@
     s.lastDay = today;
   }
 
-  function baseUrl() { return SHARE_BASE || location.href.split("#")[0]; }
+  function baseUrl() { return (PORTAL.invite && PORTAL.invite({})) || SHARE_BASE || location.href.split("#")[0]; }
   function dailyShareText() {
     var r = store.daily.results, won = counts(r).c >= NEED;
-    return "More or Less #" + today + "  " + (won ? "🛟 Rescued " + charName() + " in " + r.length : "💀 " + charName() + " was caught") +
+    return "More or Less #" + today + (root.MOL_HALLOWEEN ? " 🎃" : "") + "  " + (won ? "🛟 Rescued " + charName() + " in " + r.length : "💀 " + charName() + " was caught") +
       "\n" + shareGrid(r) + "\nStreak " + store.stats.streak + "\n" + baseUrl();
   }
   function challengeText() {
     return "I rescued " + state.rescued + " and scored " + state.score + " on More or Less. Same questions, can you beat me?\n" +
-      baseUrl() + "#c" + state.seed + "x" + state.score;
+      ((PORTAL.invite && PORTAL.invite({ c: String(state.seed), x: String(state.score) })) || baseUrl() + "#c" + state.seed + "x" + state.score);
   }
 
   function showEnd() {
+    PORTAL.stop();
+    $("btnRevive").hidden = !(PORTAL.rewarded && state.mode === "endless" && !state.revived && !state.target);
     if (state.mode === "daily") {
       var r = store.daily.results, won = counts(r).c >= NEED;
       $("endKicker").textContent = "Daily #" + today;
@@ -1655,6 +1777,19 @@
     $("btnShare").focus();
   }
   function hideEnd() { $("endPanel").hidden = true; }
+  // Xem quảng cáo có thưởng (chỉ Endless, 1 lần mỗi lượt): nối lại 1 sợi dây và chơi tiếp, giữ nguyên điểm
+  function revive() {
+    $("btnRevive").disabled = true;
+    PORTAL.rewarded(function (ok) {
+      $("btnRevive").disabled = false;
+      if (!ok) { toast("No ad available right now"); return; }
+      state.revived = true; state.over = false; state.strands = 0; state.wrong = state.maxStrands;
+      hideEnd(); hideSceneMsg();
+      scene && scene.reset({ need: NEED, allow: state.maxStrands + 1, ch: state.ch, correct: state.correct, wrong: state.wrong });
+      PORTAL.start();
+      nextRound();
+    });
+  }
 
   function toast(msg) {
     var t = $("toast");
@@ -1682,7 +1817,9 @@
     $("btnMore").onclick = function () { answer("more"); };
     $("btnLess").onclick = function () { answer("less"); };
     $("btnShare").onclick = function () { track("share-" + state.mode); copy(state.mode === "daily" ? dailyShareText() : challengeText()); };
-    $("btnAlt").onclick = function () { startEndless(); };
+    $("btnAlt").onclick = function () { PORTAL.midgame(function () { startEndless(); }); };
+    $("btnRevive").onclick = revive;
+    PORTAL.soundPref = function () { return store.sound; };
     $("btnClose").onclick = hideEnd;
     var sb = $("soundBtn");
     function paintSound() { sb.textContent = store.sound ? "Sound on" : "Sound off"; sb.setAttribute("aria-pressed", store.sound); }
@@ -1705,11 +1842,13 @@
     setInterval(tickClock, 1000); tickClock();
     // Màn "Tap to play": cú chạm này mở khoá âm thanh (trình duyệt cấm phát tiếng trước lần chạm đầu)
     var m = /^#c(\d+)x(\d+)$/.exec(location.hash);
+    if (!m && PORTAL.param("c")) m = [null, PORTAL.param("c"), PORTAL.param("x") || "0"];
     var go = m ? function () { startEndless(+m[1], +m[2]); } : startDaily;
     var ch = m ? (+m[1]) % CHARS.length : (today - 1) % CHARS.length;
     $("startTitle").textContent = "Save Princess " + CHARS[ch].name + "!";
     $("startLine").innerHTML = "Princess " + CHARS[ch].name + " is locked in a cage above the lava. Answer <b>7 of 10</b> right to pull her out. Every wrong answer snaps a rope, and the lava monster gets closer.";
-    $("startKicker").textContent = m ? "Friend challenge" : "Daily #" + today;
+    $("startKicker").textContent = (root.MOL_HALLOWEEN ? "🎃 Halloween · " : "") + (m ? "Friend challenge" : "Daily #" + today);
+    if (root.MOL_HALLOWEEN) $("startLine").innerHTML = "It's Halloween night. Princess " + CHARS[ch].name + " is locked in a cage above the lava. Answer <b>7 of 10</b> right to pull her out before the monster wakes.";
     if (m) $("btnStart").textContent = "Accept the challenge";
     scene && scene.reset({ need: NEED, allow: DAILY_STRANDS + 1, ch: ch });
     $("btnStart").onclick = function () {
@@ -1725,7 +1864,7 @@
     };
     $("btnStart").focus();
   }
-  boot();
+  if (PORTAL.init) PORTAL.init.then(boot, boot); else boot();
 })(typeof window !== "undefined" ? window : globalThis);
 
 </script>
